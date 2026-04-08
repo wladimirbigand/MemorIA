@@ -15,7 +15,7 @@ Ton objectif est de transformer ce texte brut en une fiche de révision visuelle
 RÈGLES DE FORMATAGE STRICTES :
 1. Renvoie UNIQUEMENT du code HTML valide. Aucune balise Markdown, aucun texte introductif ou conclusif.
 2. Structure la note de la manière suivante (utilise ces balises HTML) :
-   - Commence par un petit bloc résumé introductif (dans une balise <blockquote style="border-left: 4px solid #3b82f6; padding-left: 1rem; color: #4b5563; font-style: italic; margin-bottom: 1.5rem;">).
+   - Commence par un petit bloc résumé introductif (dans une balise <blockquote class="ai-summary">).
    - Utilise des <h2> pour les grands chapitres et des <h3> pour les sous-sections.
    - Utilise abondamment les listes à puces (<ul><li>) et les listes numérotées (<ol><li>) pour aérer le texte.
    - Mets TOUJOURS en <strong>gras</strong> les concepts clés, les dates importantes, les formules ou les noms propres.
