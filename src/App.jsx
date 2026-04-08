@@ -26,145 +26,26 @@ import {
   Minimize,
   RefreshCcw
 } from 'lucide-react';
-
-// --- POUR TON PROJET LOCAL VITE ---
-// Exécute la commande : npm install dexie dexie-react-hooks
-// import Dexie from 'dexie';
-// import { useLiveQuery } from 'dexie-react-hooks';
+import Dexie from 'dexie';
+import { useLiveQuery } from 'dexie-react-hooks';
 
 // --- VRAIE BASE DE DONNÉES LOCALE (DEXIE) ---
-// export const db = new Dexie('MemorIADatabase');
-// db.version(1).stores({
-//   folders: '++id, name, icon',
-//   notes: '++id, folderId, title, content, isFavorite, isDeleted, createdAt, updatedAt, *tags'
-// });
+export const db = new Dexie('MemorIADatabase');
 
-// --- MOCK DEXIE AVANCÉ (Requis pour l'environnement de prévisualisation) ---
-let mockData = { folders: [], notes: [] };
-let listeners = [];
-const trigger = () => listeners.forEach(fn => fn());
-
-export const db = {
-  folders: {
-    toArray: async () => [...mockData.folders],
-    add: async (item) => { const id = Date.now() + Math.random(); mockData.folders.push({id, isDeleted: false, ...item}); trigger(); return id; },
-    get: async (id) => mockData.folders.find(f => f.id === id),
-    update: async (id, changes) => {
-      const idx = mockData.folders.findIndex(f => f.id === id);
-      if (idx > -1) { mockData.folders[idx] = { ...mockData.folders[idx], ...changes }; trigger(); return 1; }
-      return 0;
-    },
-    delete: async (id) => {
-      const idx = mockData.folders.findIndex(f => f.id === id);
-      if (idx > -1) {
-        mockData.folders[idx] = { ...mockData.folders[idx], isDeleted: true, deletedAt: Date.now() };
-        // Soft delete des notes du dossier
-        mockData.notes = mockData.notes.map(n => n.folderId === id ? { ...n, isDeleted: true, deletedAt: Date.now() } : n);
-        trigger();
-      }
-    },
-    hardDelete: async (id) => {
-      mockData.folders = mockData.folders.filter(f => f.id !== id);
-      mockData.notes = mockData.notes.filter(n => n.folderId !== id);
-      trigger();
-    }
-  },
-  notes: {
-    toArray: async () => [...mockData.notes],
-    add: async (item) => { const id = Date.now() + Math.random(); mockData.notes.push({id, tags: [], content: '', isDeleted: false, ...item}); trigger(); return id; },
-    get: async (id) => mockData.notes.find(n => n.id === id),
-    update: async (id, changes) => {
-      const idx = mockData.notes.findIndex(n => n.id === id);
-      if (idx > -1) {
-        mockData.notes[idx] = { ...mockData.notes[idx], ...changes, updatedAt: Date.now() };
-        trigger();
-        return 1;
-      }
-      return 0;
-    },
-    delete: async (id) => {
-      const idx = mockData.notes.findIndex(n => n.id === id);
-      if (idx > -1) {
-        mockData.notes[idx] = { ...mockData.notes[idx], isDeleted: true, deletedAt: Date.now() };
-        trigger();
-      }
-    },
-    hardDelete: async (id) => {
-      mockData.notes = mockData.notes.filter(n => n.id !== id);
-      trigger();
-    }
-  }
-};
-
-export const useLiveQuery = (queryFn, deps = []) => {
-  const [data, setData] = React.useState(undefined);
-  React.useEffect(() => {
-    let isMounted = true;
-    const fetchData = async () => {
-      const result = await queryFn();
-      if (isMounted) setData(result);
-    };
-    fetchData();
-    listeners.push(fetchData);
-    return () => { 
-      isMounted = false;
-      listeners = listeners.filter(fn => fn !== fetchData); 
-    };
-  }, deps);
-  return data;
-};
+db.version(1).stores({
+  folders: '++id, name, icon, isDeleted, deletedAt',
+  notes: '++id, folderId, title, content, isFavorite, isDeleted, createdAt, updatedAt, *tags'
+});
 
 // ============================================================================
-// --- APPEL API GOOGLE GEMINI (Vraie IA) ---
+// --- APPEL API GOOGLE GEMINI (Vraie IA avec Streaming) ---
 // ============================================================================
 
-/* --- VERSION LOCALE (À DÉCOMMENTER POUR TON VRAI PROJET VITE) ---
 const formatTextWithAI = async (textToFormat, onStream) => {
-  const apiKey = localStorage.getItem('gemini_api_key');
-  if (!apiKey || apiKey.trim() === "") {
-    throw new Error("Veuillez configurer votre clé API Gemini dans les paramètres.");
-  }
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-  const systemPrompt = `Tu es un professeur expert en pédagogie et en structuration de l'information. L'utilisateur va te fournir des notes de cours brutes, souvent prises à la volée. 
-Ton objectif est de transformer ce texte brut en une fiche de révision visuellement claire, complète et facile à mémoriser.
-
-RÈGLES DE FORMATAGE STRICTES :
-1. Renvoie UNIQUEMENT du code HTML valide. Aucune balise Markdown, aucun texte introductif ou conclusif.
-2. Structure la note de la manière suivante (utilise ces balises HTML) :
-   - Commence par un petit bloc résumé introductif (dans une balise <blockquote style="border-left: 4px solid #3b82f6; padding-left: 1rem; color: #4b5563; font-style: italic; margin-bottom: 1.5rem;">).
-   - Utilise des <h2> pour les grands chapitres et des <h3> pour les sous-sections.
-   - Utilise abondamment les listes à puces (<ul><li>) et les listes numérotées (<ol><li>) pour aérer le texte.
-   - Mets TOUJOURS en <strong>gras</strong> les concepts clés, les dates importantes, les formules ou les noms propres.
-   - Si l'utilisateur mentionne des acronymes (comme WBS, MOA, etc.) ou des concepts complexes de manière laconique, étoffe légèrement la définition pour qu'elle soit compréhensible lors de la révision.
-   - Ajoute des retours à la ligne (<br> ou des marges CSS sur tes paragraphes) pour que le texte "respire".
-   - S'il y a des formules ou du code, mets-les dans des balises <pre><code> ou <code>.`;
-
-  const prompt = systemPrompt + "\n\nVoici les notes brutes à transformer en fiche de révision parfaite :\n\n" + textToFormat;
-
-  const result = await model.generateContentStream(prompt);
+  // Récupération de la clé et nettoyage des espaces invisibles accidentels
+  const apiKey = (localStorage.getItem('gemini_api_key') || "").trim(); 
   
-  let fullText = "";
-  const tick3 = String.fromCharCode(96).repeat(3);
-
-  for await (const chunk of result.stream) {
-    fullText += chunk.text();
-    let cleanHtml = fullText.replace(new RegExp('^' + tick3 + 'html\\s*', 'i'), '').replace(new RegExp(tick3 + '\\s*$', 'i'), '').trim();
-    if (onStream) onStream(cleanHtml);
-  }
-  
-  return fullText.replace(new RegExp('^' + tick3 + 'html\\s*', 'i'), '').replace(new RegExp(tick3 + '\\s*$', 'i'), '').trim();
-};
----------------------------------------------------------------------------- */
-
-// --- VERSION POUR CE CANVAS (Streaming via fetch SSE natif) ---
-const formatTextWithAI = async (textToFormat, onStream) => {
-  // Récupération de la clé depuis les paramètres (obligatoire sur GitHub Pages)
-  const apiKey = localStorage.getItem('gemini_api_key'); 
-  
-  if (!apiKey || apiKey.trim() === "") {
+  if (!apiKey) {
     throw new Error("Clé API manquante. Veuillez configurer votre clé Gemini dans les paramètres (icône ⚙️).");
   }
 
@@ -196,7 +77,13 @@ RÈGLES DE FORMATAGE STRICTES :
     body: JSON.stringify(payload)
   });
 
-  if (!response.ok) throw new Error(`Code HTTP: ${response.status}`);
+  // Gestion d'erreur spécifique pour le statut HTTP 403 (Forbidden)
+  if (response.status === 403) {
+    throw new Error("Erreur 403 (Accès refusé). Votre clé API Google est invalide, a expiré, ou n'a pas accès à l'API Gemini. Veuillez vérifier votre clé.");
+  }
+  if (!response.ok) {
+    throw new Error(`Erreur réseau (Code HTTP: ${response.status}). Vérifiez votre clé API ou votre connexion.`);
+  }
 
   // Lecture du flux (Streaming)
   const reader = response.body.getReader();
@@ -297,7 +184,7 @@ const SettingsModal = ({ isOpen, onClose, showAIButton, setShowAIButton }) => {
   if (!isOpen) return null;
 
   const handleSave = () => {
-    localStorage.setItem('gemini_api_key', apiKey);
+    localStorage.setItem('gemini_api_key', apiKey.trim()); // Nettoyage lors de la sauvegarde
     localStorage.setItem('showAIButton', localShowAI);
     setShowAIButton(localShowAI);
     onClose();
@@ -385,14 +272,14 @@ const Sidebar = ({ selectedNoteId, setSelectedNoteId, isDark, toggleTheme, onOpe
   const [renameModal, setRenameModal] = useState({ isOpen: false, id: null, type: '', currentValue: '' });
 
   const handleCreateFolder = async () => {
-    const id = await db.folders.add({ name: 'Nouveau cours', icon: 'Folder' });
+    const id = await db.folders.add({ name: 'Nouveau cours', icon: 'Folder', isDeleted: false });
     setExpandedFolders(prev => ({ ...prev, [id]: true }));
     setRenameModal({ isOpen: true, id, type: 'folder', currentValue: 'Nouveau cours' });
   };
 
   const handleCreateNote = async (folderId) => {
     const newNoteId = await db.notes.add({
-      folderId, title: 'Nouvelle note', content: '', isFavorite: false, createdAt: Date.now(), updatedAt: Date.now(), tags: []
+      folderId, title: 'Nouvelle note', content: '', isFavorite: false, isDeleted: false, createdAt: Date.now(), updatedAt: Date.now(), tags: []
     });
     setExpandedFolders(prev => ({ ...prev, [folderId]: true }));
     setSelectedNoteId(newNoteId);
@@ -400,7 +287,7 @@ const Sidebar = ({ selectedNoteId, setSelectedNoteId, isDark, toggleTheme, onOpe
   };
 
   const handleGlobalCreateNote = async () => {
-    let targetFolderId = activeFolders && activeFolders.length > 0 ? activeFolders[0].id : await db.folders.add({ name: 'Général', icon: 'Folder' });
+    let targetFolderId = activeFolders && activeFolders.length > 0 ? activeFolders[0].id : await db.folders.add({ name: 'Général', icon: 'Folder', isDeleted: false });
     await handleCreateNote(targetFolderId);
   };
 
@@ -854,7 +741,6 @@ const EditorArea = ({ selectedNoteId, showAIButton }) => {
 
   useEffect(() => {
     if (note) {
-      // CORRECTION DU BUG DE RAFRAÎCHISSEMENT : On vérifie aussi si l'état isDeleted a changé
       if (prevNoteRef.current?.id !== note.id || prevNoteRef.current?.isDeleted !== note.isDeleted) {
         setLocalTitle(note.title || '');
         setLocalTags(note.tags || []);
@@ -1069,7 +955,7 @@ const EditorArea = ({ selectedNoteId, showAIButton }) => {
 export default function App() {
   const [selectedNoteId, setSelectedNoteId] = useState(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isFocusMode, setIsFocusMode] = useState(false); // État du mode plein écran
+  const [isFocusMode, setIsFocusMode] = useState(false);
   
   const [showAIButton, setShowAIButton] = useState(() => {
     if (typeof window !== 'undefined') {
