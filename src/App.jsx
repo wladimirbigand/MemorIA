@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import Dexie from 'dexie';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // --- VRAIE BASE DE DONNÉES LOCALE (DEXIE) ---
 export const db = new Dexie('MemorIADatabase');
@@ -41,16 +42,21 @@ db.version(1).stores({
 // --- APPEL API GOOGLE GEMINI (Vraie IA avec Streaming) ---
 // ============================================================================
 
+// ============================================================================
+// --- APPEL API GOOGLE GEMINI (Vraie IA avec Streaming) ---
+// ============================================================================
+
 const formatTextWithAI = async (textToFormat, onStream) => {
-  // Récupération de la clé et nettoyage des espaces invisibles accidentels
+  // Récupération de la clé depuis l'engrenage de ton application
   const apiKey = (localStorage.getItem('gemini_api_key') || "").trim(); 
   
   if (!apiKey) {
     throw new Error("Clé API manquante. Veuillez configurer votre clé Gemini dans les paramètres (icône ⚙️).");
   }
 
-  // Utilisation d'un modèle public stable (1.5-flash) compatible avec toutes les clés
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
+  // Initialisation du client officiel Google Generative AI
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
   const systemPrompt = `Tu es un professeur expert en pédagogie et en structuration de l'information. L'utilisateur va te fournir des notes de cours brutes, souvent prises à la volée. 
 Ton objectif est de transformer ce texte brut en une fiche de révision visuellement claire, complète et facile à mémoriser.
@@ -66,57 +72,19 @@ RÈGLES DE FORMATAGE STRICTES :
    - Ajoute des retours à la ligne (<br> ou des marges CSS sur tes paragraphes) pour que le texte "respire".
    - S'il y a des formules ou du code, mets-les dans des balises <pre><code> ou <code>.`;
   
-  const payload = {
-    contents: [{ parts: [{ text: "Voici les notes brutes à transformer en fiche de révision parfaite :\n\n" + textToFormat }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] }
-  };
+  const prompt = systemPrompt + "\n\nVoici les notes brutes à transformer en fiche de révision parfaite :\n\n" + textToFormat;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-
-  // Gestion d'erreur spécifique pour le statut HTTP 403 (Forbidden)
-  if (response.status === 403) {
-    throw new Error("Erreur 403 (Accès refusé). Votre clé API Google est invalide, a expiré, ou n'a pas accès à l'API Gemini. Veuillez vérifier votre clé.");
-  }
-  if (!response.ok) {
-    throw new Error(`Erreur réseau (Code HTTP: ${response.status}). Vérifiez votre clé API ou votre connexion.`);
-  }
-
-  // Lecture du flux (Streaming)
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
+  // Utilisation de la méthode native de streaming du SDK (Pas de fetch manuel !)
+  const result = await model.generateContentStream(prompt);
+  
   let fullText = "";
-  let buffer = "";
   const tick3 = String.fromCharCode(96).repeat(3);
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop(); 
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const dataStr = line.slice(6);
-        if (dataStr === '[DONE]') continue;
-        try {
-          const data = JSON.parse(dataStr);
-          const textChunk = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          fullText += textChunk;
-          
-          // Nettoyage en temps réel
-          let cleanHtml = fullText.replace(new RegExp('^' + tick3 + 'html\\s*', 'i'), '').replace(new RegExp(tick3 + '\\s*$', 'i'), '').trim();
-          if (onStream) onStream(cleanHtml);
-        } catch (e) {
-          // Ignore les erreurs de parsing partielles
-        }
-      }
-    }
+  // Lecture du flux de données en temps réel
+  for await (const chunk of result.stream) {
+    fullText += chunk.text();
+    let cleanHtml = fullText.replace(new RegExp('^' + tick3 + 'html\\s*', 'i'), '').replace(new RegExp(tick3 + '\\s*$', 'i'), '').trim();
+    if (onStream) onStream(cleanHtml);
   }
   
   return fullText.replace(new RegExp('^' + tick3 + 'html\\s*', 'i'), '').replace(new RegExp(tick3 + '\\s*$', 'i'), '').trim();
