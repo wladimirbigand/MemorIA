@@ -27,80 +27,16 @@ import {
   RefreshCcw
 } from 'lucide-react';
 
-// --- MOCK DEXIE AVANCÉ (Ajout du Soft Delete et Hard Delete) ---
-let mockData = { folders: [], notes: [] };
-let listeners = [];
-const trigger = () => listeners.forEach(fn => fn());
+import Dexie from 'dexie';
+import { useLiveQuery } from 'dexie-react-hooks';
 
-export const db = {
-  folders: {
-    toArray: async () => [...mockData.folders],
-    add: async (item) => { const id = Date.now() + Math.random(); mockData.folders.push({id, isDeleted: false, ...item}); trigger(); return id; },
-    get: async (id) => mockData.folders.find(f => f.id === id),
-    update: async (id, changes) => {
-      const idx = mockData.folders.findIndex(f => f.id === id);
-      if (idx > -1) { mockData.folders[idx] = { ...mockData.folders[idx], ...changes }; trigger(); return 1; }
-      return 0;
-    },
-    delete: async (id) => {
-      const idx = mockData.folders.findIndex(f => f.id === id);
-      if (idx > -1) {
-        mockData.folders[idx] = { ...mockData.folders[idx], isDeleted: true, deletedAt: Date.now() };
-        // Soft delete des notes du dossier
-        mockData.notes = mockData.notes.map(n => n.folderId === id ? { ...n, isDeleted: true, deletedAt: Date.now() } : n);
-        trigger();
-      }
-    },
-    hardDelete: async (id) => {
-      mockData.folders = mockData.folders.filter(f => f.id !== id);
-      mockData.notes = mockData.notes.filter(n => n.folderId !== id);
-      trigger();
-    }
-  },
-  notes: {
-    toArray: async () => [...mockData.notes],
-    add: async (item) => { const id = Date.now() + Math.random(); mockData.notes.push({id, tags: [], content: '', isDeleted: false, ...item}); trigger(); return id; },
-    get: async (id) => mockData.notes.find(n => n.id === id),
-    update: async (id, changes) => {
-      const idx = mockData.notes.findIndex(n => n.id === id);
-      if (idx > -1) {
-        mockData.notes[idx] = { ...mockData.notes[idx], ...changes, updatedAt: Date.now() };
-        trigger();
-        return 1;
-      }
-      return 0;
-    },
-    delete: async (id) => {
-      const idx = mockData.notes.findIndex(n => n.id === id);
-      if (idx > -1) {
-        mockData.notes[idx] = { ...mockData.notes[idx], isDeleted: true, deletedAt: Date.now() };
-        trigger();
-      }
-    },
-    hardDelete: async (id) => {
-      mockData.notes = mockData.notes.filter(n => n.id !== id);
-      trigger();
-    }
-  }
-};
+// --- VRAIE BASE DE DONNÉES LOCALE (DEXIE) ---
+export const db = new Dexie('MemorIADatabase');
 
-export const useLiveQuery = (queryFn, deps = []) => {
-  const [data, setData] = React.useState(undefined);
-  React.useEffect(() => {
-    let isMounted = true;
-    const fetchData = async () => {
-      const result = await queryFn();
-      if (isMounted) setData(result);
-    };
-    fetchData();
-    listeners.push(fetchData);
-    return () => { 
-      isMounted = false;
-      listeners = listeners.filter(fn => fn !== fetchData); 
-    };
-  }, deps);
-  return data;
-};
+db.version(1).stores({
+  folders: '++id, name, icon',
+  notes: '++id, folderId, title, content, isFavorite, isDeleted, createdAt, updatedAt, *tags'
+});
 
 // ============================================================================
 // --- APPEL API GOOGLE GEMINI (Vraie IA) ---
