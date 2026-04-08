@@ -1,3 +1,20 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Style par défaut (Mode Clair) */
+.ai-summary {
+  border-left: 4px solid #3b82f6; /* Bleu Notion */
+  padding-left: 1rem;
+  color: #4b5563; /* Gris foncé */
+  font-style: italic;
+  margin-bottom: 1.5rem;
+  background-color: #eff6ff; /* Bleu très clair */
+}
+
+/* Style spécifique pour le Mode Sombre */
+.dark .ai-summary {
+  border-left-color: #60a5fa; /* Bleu plus clair pour sombre */
+  color: #d1d5db; /* Gris clair */
+  background-color: #1e3a8a33; /* Bleu très foncé transparent */
+}
