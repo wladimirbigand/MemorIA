@@ -27,16 +27,92 @@ import {
   RefreshCcw
 } from 'lucide-react';
 
-import Dexie from 'dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
+// --- POUR TON PROJET LOCAL VITE ---
+// Exécute la commande : npm install dexie dexie-react-hooks
+// import Dexie from 'dexie';
+// import { useLiveQuery } from 'dexie-react-hooks';
 
 // --- VRAIE BASE DE DONNÉES LOCALE (DEXIE) ---
-export const db = new Dexie('MemorIADatabase');
+// export const db = new Dexie('MemorIADatabase');
+// db.version(1).stores({
+//   folders: '++id, name, icon',
+//   notes: '++id, folderId, title, content, isFavorite, isDeleted, createdAt, updatedAt, *tags'
+// });
 
-db.version(1).stores({
-  folders: '++id, name, icon',
-  notes: '++id, folderId, title, content, isFavorite, isDeleted, createdAt, updatedAt, *tags'
-});
+// --- MOCK DEXIE AVANCÉ (Requis pour l'environnement de prévisualisation) ---
+let mockData = { folders: [], notes: [] };
+let listeners = [];
+const trigger = () => listeners.forEach(fn => fn());
+
+export const db = {
+  folders: {
+    toArray: async () => [...mockData.folders],
+    add: async (item) => { const id = Date.now() + Math.random(); mockData.folders.push({id, isDeleted: false, ...item}); trigger(); return id; },
+    get: async (id) => mockData.folders.find(f => f.id === id),
+    update: async (id, changes) => {
+      const idx = mockData.folders.findIndex(f => f.id === id);
+      if (idx > -1) { mockData.folders[idx] = { ...mockData.folders[idx], ...changes }; trigger(); return 1; }
+      return 0;
+    },
+    delete: async (id) => {
+      const idx = mockData.folders.findIndex(f => f.id === id);
+      if (idx > -1) {
+        mockData.folders[idx] = { ...mockData.folders[idx], isDeleted: true, deletedAt: Date.now() };
+        // Soft delete des notes du dossier
+        mockData.notes = mockData.notes.map(n => n.folderId === id ? { ...n, isDeleted: true, deletedAt: Date.now() } : n);
+        trigger();
+      }
+    },
+    hardDelete: async (id) => {
+      mockData.folders = mockData.folders.filter(f => f.id !== id);
+      mockData.notes = mockData.notes.filter(n => n.folderId !== id);
+      trigger();
+    }
+  },
+  notes: {
+    toArray: async () => [...mockData.notes],
+    add: async (item) => { const id = Date.now() + Math.random(); mockData.notes.push({id, tags: [], content: '', isDeleted: false, ...item}); trigger(); return id; },
+    get: async (id) => mockData.notes.find(n => n.id === id),
+    update: async (id, changes) => {
+      const idx = mockData.notes.findIndex(n => n.id === id);
+      if (idx > -1) {
+        mockData.notes[idx] = { ...mockData.notes[idx], ...changes, updatedAt: Date.now() };
+        trigger();
+        return 1;
+      }
+      return 0;
+    },
+    delete: async (id) => {
+      const idx = mockData.notes.findIndex(n => n.id === id);
+      if (idx > -1) {
+        mockData.notes[idx] = { ...mockData.notes[idx], isDeleted: true, deletedAt: Date.now() };
+        trigger();
+      }
+    },
+    hardDelete: async (id) => {
+      mockData.notes = mockData.notes.filter(n => n.id !== id);
+      trigger();
+    }
+  }
+};
+
+export const useLiveQuery = (queryFn, deps = []) => {
+  const [data, setData] = React.useState(undefined);
+  React.useEffect(() => {
+    let isMounted = true;
+    const fetchData = async () => {
+      const result = await queryFn();
+      if (isMounted) setData(result);
+    };
+    fetchData();
+    listeners.push(fetchData);
+    return () => { 
+      isMounted = false;
+      listeners = listeners.filter(fn => fn !== fetchData); 
+    };
+  }, deps);
+  return data;
+};
 
 // ============================================================================
 // --- APPEL API GOOGLE GEMINI (Vraie IA) ---
@@ -85,8 +161,15 @@ RÈGLES DE FORMATAGE STRICTES :
 
 // --- VERSION POUR CE CANVAS (Streaming via fetch SSE natif) ---
 const formatTextWithAI = async (textToFormat, onStream) => {
-  const apiKey = ""; // L'environnement Canvas fournit la clé automatiquement
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:streamGenerateContent?alt=sse&key=${apiKey}`;
+  // Récupération de la clé depuis les paramètres (obligatoire sur GitHub Pages)
+  const apiKey = localStorage.getItem('gemini_api_key'); 
+  
+  if (!apiKey || apiKey.trim() === "") {
+    throw new Error("Clé API manquante. Veuillez configurer votre clé Gemini dans les paramètres (icône ⚙️).");
+  }
+
+  // Utilisation d'un modèle public stable (1.5-flash) compatible avec toutes les clés
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
 
   const systemPrompt = `Tu es un professeur expert en pédagogie et en structuration de l'information. L'utilisateur va te fournir des notes de cours brutes, souvent prises à la volée. 
 Ton objectif est de transformer ce texte brut en une fiche de révision visuellement claire, complète et facile à mémoriser.
@@ -334,11 +417,17 @@ const Sidebar = ({ selectedNoteId, setSelectedNoteId, isDark, toggleTheme, onOpe
 
   const executeDelete = async () => {
     if (deleteModal.type === 'folder') {
-      await db.folders.delete(deleteModal.id); // Soft delete
+      await db.folders.update(deleteModal.id, { isDeleted: true, deletedAt: Date.now() }); // Soft delete
+      const folderNotes = await db.notes.toArray();
+      for (const n of folderNotes) {
+        if (n.folderId === deleteModal.id) {
+          await db.notes.update(n.id, { isDeleted: true, deletedAt: Date.now() });
+        }
+      }
       const currentNote = await db.notes.get(selectedNoteId);
       if (currentNote?.folderId === deleteModal.id) setSelectedNoteId(null);
     } else {
-      await db.notes.delete(deleteModal.id); // Soft delete
+      await db.notes.update(deleteModal.id, { isDeleted: true, deletedAt: Date.now() }); // Soft delete
       if (selectedNoteId === deleteModal.id) setSelectedNoteId(null);
     }
     setDeleteModal({ isOpen: false, id: null, type: '', name: '' });
@@ -603,7 +692,7 @@ const TopBar = ({ selectedNoteId, setSelectedNoteId, isFocusMode, setIsFocusMode
   };
 
   const executeHardDelete = async () => {
-    await db.notes.hardDelete(selectedNoteId);
+    await db.notes.delete(selectedNoteId); // Real hard delete in Dexie
     setSelectedNoteId(null);
     setIsDeleteConfirmOpen(false);
   };
